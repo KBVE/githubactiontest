@@ -100,7 +100,7 @@ jobs:
           const message = ESCAPED_ISSUE_BODY;
 
           const payload = JSON.stringify({
-            system
+            system,
             message,
             model: "llama3-8b-8192"
           });
