@@ -16,37 +16,91 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '14'
+
+    - name: Install markdown-json
+      run: npm install markdown-json
+
     - name: Check if issue title contains [MUSIC]
-      run: ./scripts/check_title.sh "${{ github.event.issue.title }}"
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const issueTitle = context.payload.issue.title;
+          if (issueTitle.includes("[MUSIC]")) {
+            core.exportVariable('IS_MUSIC_ISSUE', 'true');
+          } else {
+            core.exportVariable('IS_MUSIC_ISSUE', 'false');
+          }
 
     - name: Stop if not a music issue
-      if: env.is_music_issue == 'false'
+      if: env.IS_MUSIC_ISSUE == 'false'
       run: echo "Not a music issue. Skipping further steps."
 
     - name: Check for YouTube link in issue body
-      if: env.is_music_issue == 'true'
-      run: ./scripts/check_youtube.sh "${{ github.event.issue.body }}"
+      if: env.IS_MUSIC_ISSUE == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const issueBody = context.payload.issue.body;
+          const youtubeLink = issueBody.match(/https:\/\/www.youtube.com\/watch\?v=([\w-]+)/);
+          if (youtubeLink) {
+            core.exportVariable('HAS_YOUTUBE_LINK', 'true');
+            core.exportVariable('YOUTUBE_ID', youtubeLink[1]);
+          } else {
+            core.exportVariable('HAS_YOUTUBE_LINK', 'false');
+          }
 
     - name: Display YouTube link check result
-      if: env.is_music_issue == 'true'
-      run: echo "Contains YouTube link: ${{ env.has_youtube_link }}"
+      if: env.IS_MUSIC_ISSUE == 'true'
+      run: echo "Contains YouTube link: ${{ env.HAS_YOUTUBE_LINK }}"
 
     - name: Escape issue body for JSON
-      if: env.has_youtube_link == 'true' && env.is_music_issue == 'true'
-      run: ./scripts/escape_issue_body.sh "${{ github.event.issue.body }}"
+      if: env.HAS_YOUTUBE_LINK == 'true' && env.IS_MUSIC_ISSUE == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const markdownJson = require('markdown-json');
+          const issueBody = context.payload.issue.body;
+          const escapedIssueBody = markdownJson.parse(issueBody);
+          core.exportVariable('ESCAPED_ISSUE_BODY', JSON.stringify(escapedIssueBody));
 
     - name: Extract and display YouTube ID if link is found
-      if: env.has_youtube_link == 'true' && env.is_music_issue == 'true'
-      run: ./scripts/send_payload.sh "${{ env.youtube_id }}" "${{ env.escaped_issue_body }}"
+      if: env.HAS_YOUTUBE_LINK == 'true' && env.IS_MUSIC_ISSUE == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { YOUTUBE_ID, ESCAPED_ISSUE_BODY } = process.env;
+          const message = `Please read the provided text, extract the required information, sanitize the title, and fill it into the specified command format. The title should only contain numbers, letters, and the characters () . and -.\n\n**Input:**\n\`\`\`\n\n**Fill out the Form**\n\nYouTube Link: https://www.youtube.com/watch?v=${YOUTUBE_ID}\nTitle: Hippie Sabotage - The Best of Chill Music (Mix)\nGenre: lofihiphop\n\n## Human\n\nFor supported genres, please visit [Music](https://kbve.com/music/)\nPick only one of the different genres!\ndnb, chillstep, lofihiphop, nujazz, electroswing, edm, rock\n\n\n\`\`\`\n\n**Output:**\n\n\`\`\`bash\n./kbve.sh -nx kbve.com:music --args=\\\"--file=lofihiphop --title='Hippie Sabotage - The Best of Chill Music (Mix)' --ytid=${YOUTUBE_ID}\\\"\"\n\nHere is the template for the command:\n\`\`\`\n./kbve.sh -nx kbve.com:music --args=\\\"--file=[insert file/genre here] --title='[insert sanitized title here]' --ytid=[insert YouTube ID here]\\\"\n\nEnsure to:\n1. Extract the \`File/Genre\`, \`Title\`, and \`YouTube ID\` from the text.\n2. Sanitize the \`Title\` to only include numbers, letters, and the characters () . and -.\n3. Only acceptable genres/file are dnb, chillstep, lofihiphop, nujazz, electroswing, edm, rock\n4. Fill in the command template with the extracted and sanitized values.\n\n**Example Input:**\n\`\`\`text\nFile/Genre: jazz\nTitle: Louis Armstrong - What a Wonderful World (Jazz Remix)\nYouTube ID: abc12345\`\`\`\n\n**Example Output:**\n\`\`\`bash\n./kbve.sh -nx kbve.com:music --args=\\\"--file=jazz --title='Louis Armstrong - What a Wonderful World (Jazz Remix)' --ytid=abc12345\\\"\"\n\n**Your Task:**\nPlease parse the provided text below and generate the command.\n\n**Input:**\n${ESCAPED_ISSUE_BODY}\n\n**Output:**\n\`\`\`bash\n\`\`\``
+          const payload = JSON.stringify({
+            message,
+            model: "llama3-8b-8192"
+          });
+
+          const axios = require('axios');
+          const response = await axios.post('https://rust.kbve.com/api/v1/call_groq', payload, {
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          core.exportVariable('GROQ_OUTPUT', response.data);
 
     - name: Post comment to issue
-      if: env.has_youtube_link == 'true' && env.is_music_issue == 'true'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GROQ_OUTPUT: ${{ env.groq_output }}
-      run: |
-        COMMENT_BODY_SANITIZED=$(echo "$GROQ_OUTPUT" | sed 's/"/\\"/g')
-        curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
-             -H "Content-Type: application/json" \
-             -d "{\"body\": \"Here is the processed information:\\n\\n\`\`\`bash\\n$COMMENT_BODY_SANITIZED\\n\`\`\`\"}" \
-             "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
+      if: env.HAS_YOUTUBE_LINK == 'true' && env.IS_MUSIC_ISSUE == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { GROQ_OUTPUT } = process.env;
+          const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN'));
+          const issue_number = context.issue.number;
+          const repo = context.repo.repo;
+          const owner = context.repo.owner;
+
+          await octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number,
+            body: `Here is the processed information:\n\n\`\`\`bash\n${GROQ_OUTPUT}\n\`\`\``
+          });
