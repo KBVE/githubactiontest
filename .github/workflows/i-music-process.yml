@@ -16,24 +16,26 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    - name: Setup Node.js
+
+    - name: Set up Node.js
       uses: actions/setup-node@v3
       with:
         node-version: '20'
 
-    - name: Install markdown-json
-      run: npm install markdown-json
+    - name: Install dependencies
+      run: |
+        npm install marked dompurify jsdom
 
     - name: Check if issue title contains [MUSIC]
       uses: actions/github-script@v7
       with:
         script: |
-          const issueTitle = context.payload.issue.title;
-          if (issueTitle.includes("[MUSIC]")) {
-            core.exportVariable('IS_MUSIC_ISSUE', 'true');
-          } else {
-            core.exportVariable('IS_MUSIC_ISSUE', 'false');
-          }
+            const issueTitle = context.payload.issue.title;
+            if (issueTitle.includes("[MUSIC]")) {
+              core.exportVariable('IS_MUSIC_ISSUE', 'true');
+            } else {
+              core.exportVariable('IS_MUSIC_ISSUE', 'false');
+            }
 
     - name: Stop if not a music issue
       if: env.IS_MUSIC_ISSUE == 'false'
@@ -56,17 +58,39 @@ jobs:
     - name: Display YouTube link check result
       if: env.IS_MUSIC_ISSUE == 'true'
       run: |
-        echo "Contains YouTube link: ${{ env.HAS_YOUTUBE_LINK }}"
+          echo "Contains YouTube link: ${{ env.HAS_YOUTUBE_LINK }}"
 
     - name: Escape issue body for JSON
       if: env.HAS_YOUTUBE_LINK == 'true' && env.IS_MUSIC_ISSUE == 'true'
       uses: actions/github-script@v7
       with:
         script: |
-          const markdownJson = require('markdown-json');
-          const issueBody = context.payload.issue.body;
-          const escapedIssueBody = markdownJson.parse(issueBody);
-          core.exportVariable('ESCAPED_ISSUE_BODY', JSON.stringify(escapedIssueBody));
+              const core = require('@actions/core');
+              const github = require('@actions/github');
+              const marked = require('marked');
+              const DOMPurify = require('dompurify')(new (require('jsdom').JSDOM)().window);
+              const { JSDOM } = require('jsdom');
+    
+              function markdownToJsonSafeString(markdownContent) {
+                  // Convert markdown to HTML
+                  const htmlContent = marked.parse(markdownContent);
+    
+                  // Sanitize the HTML content
+                  const sanitizedHtmlContent = DOMPurify.sanitize(htmlContent);
+    
+                  // Use jsdom to create a temporary DOM element to extract text content from sanitized HTML
+                  const dom = new JSDOM(sanitizedHtmlContent);
+                  const textContent = dom.window.document.body.textContent || '';
+    
+                  // Ensure the text content is JSON-safe
+                  const jsonSafeString = JSON.stringify(textContent);
+    
+                  return jsonSafeString;
+              }
+    
+              const issueBody = github.context.payload.issue.body;
+              const escapedIssueBody = markdownToJsonSafeString(issueBody);
+              core.exportVariable('ESCAPED_ISSUE_BODY', escapedIssueBody);
 
     - name: Extract and display YouTube ID if link is found
       if: env.HAS_YOUTUBE_LINK == 'true' && env.IS_MUSIC_ISSUE == 'true'
@@ -91,10 +115,12 @@ jobs:
     - name: Post comment to issue
       if: env.HAS_YOUTUBE_LINK == 'true' && env.IS_MUSIC_ISSUE == 'true'
       uses: actions/github-script@v7
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         script: |
           const { GROQ_OUTPUT } = process.env;
-          const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN'));
+          const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
           const issue_number = context.issue.number;
           const repo = context.repo.repo;
           const owner = context.repo.owner;
@@ -103,5 +129,5 @@ jobs:
             owner,
             repo,
             issue_number,
-            body: `Here is the processed information:\n\n\`\`\`bash\n${GROQ_OUTPUT}\n\`\`\``
+            body: `Here is the JSON processed information:\n\n\`\`\`json\n${GROQ_OUTPUT}\n\`\`\``
           });
