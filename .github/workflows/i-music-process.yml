@@ -86,7 +86,7 @@ jobs:
                   return jsonSafeString;
               }
     
-              const issueBody = github.context.payload.issue.body;
+              const issueBody = context.payload.issue.body;
               const escapedIssueBody = markdownToJsonSafeString(issueBody);
               core.exportVariable('ESCAPED_ISSUE_BODY', escapedIssueBody);
 
