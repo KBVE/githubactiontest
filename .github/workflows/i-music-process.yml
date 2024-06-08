@@ -55,7 +55,8 @@ jobs:
 
     - name: Display YouTube link check result
       if: env.IS_MUSIC_ISSUE == 'true'
-      run: echo "Contains YouTube link: ${{ env.HAS_YOUTUBE_LINK }}"
+      run: |
+        echo "Contains YouTube link: ${{ env.HAS_YOUTUBE_LINK }}"
 
     - name: Escape issue body for JSON
       if: env.HAS_YOUTUBE_LINK == 'true' && env.IS_MUSIC_ISSUE == 'true'
